@@ -233,7 +233,7 @@
   [from to]
   (dosync
     (when-let [item (first (:items @from))]
-      (commute to update-in [:items] conj item)
+      (alter to update-in [:items] conj item)
       (alter from update-in [:items] disj item))))
 
 (wait-futures 1

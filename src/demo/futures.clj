@@ -113,5 +113,113 @@
 
 ;Refs;;;;;;;;;;;;;;;
 
+(defn character
+  [name & {:as opts}]
+   (ref (merge {:name name :items #{} :health 500}
+               opts)))
 
+(def smaug (character "Smaug" :health 500 :strength 400 :items (set (range 50))))
+(def bilbo (character "Bilbo" :health 100 :strength 100))
+(def gandalf (character "Gandalf" :health 75 :mana 750))
+;bilbo,gandalf 抢夺smaug :item所有武器！
+;dosync 规定 STM 边界
+;alter,commute,ref-set 对 ref 进行修改
+;loot函数负责抢夺武器。
+(defn loot
+  [from to]
+  (dosync
+    (when-let [item (first (:items @from))]
+      (alter to update-in [:items] conj item)
+      (alter from update-in [:items] disj item))))
 
+(wait-futures 1
+              (while (loot smaug bilbo))
+              (while (loot smaug gandalf)))
+
+;验证正确性
+(map (comp count :items deref) [bilbo gandalf] )
+(filter (:items @bilbo) (:items @gandalf))
+
+;COMMUTE 改善性能。commute提交时用最新值。不进行初始值与新值校验。
+;commute 的函数符合交换率，就是可以没有前后之分。如+。先加后加谁都一样。
+(def x (ref 0))
+;232"
+(time (wait-futures 5
+                    (dotimes [_ 1000]
+                      (dosync (alter x + (apply + (range 1000)))))
+                    (dotimes [_ 1000]
+                      (dosync (alter x + (apply + (range 1000)))))))
+;59"
+(time (wait-futures 5
+                    (dotimes [_ 1000]
+                      (dosync (commute x + (apply + (range 1000)))))
+                    (dotimes [_ 1000]
+                      (dosync (commute x + (apply + (range 1000)))))))
+;ref加武器，没有顺序；取武器有顺序
+(defn flawed-loot
+  [from to]
+  (dosync
+    (when-let [item (first (:items @from))]
+      (commute to update-in [:items] conj item)
+      (alter from update-in [:items] disj item))))
+
+(def smaug (character "Smaug" :health 500 :strength 400 :items (set (range 50))))
+(def bilbo (character "Bilbo" :health 100 :strength 100))
+(def gandalf (character "Gandalf" :health 75 :mana 750))
+
+(wait-futures 1
+              (while (flawed-loot smaug bilbo))
+              (while (flawed-loot smaug gandalf)))
+
+;验证正确性
+(map (comp count :items deref) [bilbo gandalf] )
+(filter (:items @bilbo) (:items @gandalf))
+
+;;other actions
+(defn attack
+  [aggressor target]
+  (dosync
+    (let [damage (* (rand 0.1) (:strength @aggressor))]
+      (commute target update-in [:health] #(max 0 (- % damage))))))
+
+(defn heal
+  [healer target]
+  (dosync
+    (let [aid (* (rand 0.1) (:mana @healer))]
+      (when (pos? aid)
+        (commute healer update-in [:mana] - (max 5 (/ aid 5)))
+        (commute target update-in [:health] + aid)))))
+
+;;demo
+(def alive? (comp pos? :health))
+
+(defn play
+  [character action other]
+  (while (and (alive? @character)
+              (alive? @other)
+              (action character other))
+    (Thread/sleep (rand-int 50))))
+
+;;action
+(wait-futures 1
+              (play bilbo attack smaug)
+              (play smaug attack bilbo))
+
+(map (comp :health deref) [smaug bilbo])
+
+;; 多人战斗
+(dosync
+  (alter smaug assoc :health 500)
+  (alter bilbo assoc :health 100)
+  (alter gandalf assoc :mana 750))
+
+(wait-futures 1
+              (play bilbo attack smaug)
+              (play smaug attack bilbo)
+              (play gandalf heal bilbo))
+
+(map (comp #(select-keys % [:name :health :mana]) deref) [smaug bilbo gandalf])
+
+;;修改ref. 与alter 相同 都会重试！
+(dosync (ref-set bilbo {:name "Bilbo"}))
+(dosync (alter bilbo (constantly {:name "Bilbo"})))
