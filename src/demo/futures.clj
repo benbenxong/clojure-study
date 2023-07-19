@@ -1,5 +1,6 @@
 (ns demo.futures
   (:use clojure.pprint))
+(require '[clojure.repl :refer [demunge]])
 ;并发操作
 ;    协调  不协调
 ;同步 refs atoms
@@ -223,3 +224,45 @@
 ;;修改ref. 与alter 相同 都会重试！
 (dosync (ref-set bilbo {:name "Bilbo"}))
 (dosync (alter bilbo (constantly {:name "Bilbo"})))
+
+;;校验器
+(defn- enforce-max-health
+  [{:keys [name health]}]
+  (fn [character-data]
+    (or (<= (:health character-data) health)
+        (throw (IllegalStateException. (str name " is already st max health!"))))))
+
+(defn character
+  [name & {:as opts}]
+  (let [cdata (merge {:name name :items #{} :health 500}
+                     opts)
+        cdata (assoc cdata :max-health (:health cdata))
+        validators (list* (enforce-max-health cdata)
+                          (:validators cdata))]
+    (ref (dissoc cdata :validators)
+         :validator #(every? (fn [v] (v %)) validators))))
+
+(def bilbo (character "Bilbo" :health 100 :strength 100))
+
+(heal gandalf bilbo)
+
+(get-validator bilbo)
+(-> (get-validator bilbo)  ; get-validator returns the function object
+    class                ; get the Class instance
+    .getSimpleName       ; access the inner class name, no package
+    demunge              ; demunge is the opposite of munge
+    symbol)
+
+;;改善heal
+(defn heal
+  [healer target]
+  (dosync
+    (let [aid (min (* (rand 0.1) (:mana @healer))
+                   (- (:max-health @target) (:health @target)))]
+      (when (pos? aid)
+        (commute healer update-in [:mana] - (max 5 (/ aid 5)))
+        (commute target update-in [:health] + aid)))))
+
+(dosync (alter bilbo assoc-in [:health] 95))
+(heal gandalf bilbo)
+(heal gandalf bilbo)
