@@ -266,3 +266,120 @@
 (dosync (alter bilbo assoc-in [:health] 95))
 (heal gandalf bilbo)
 (heal gandalf bilbo)
+
+;;STM缺点：
+;;dosync内不能有IO操作。（可以用io!将操作括起来）
+(defn unsafe
+  []
+  (io! (println "writing to database...")))
+(dosync (unsafe))
+
+;;ref 不能是可变类型、
+(def x (ref (java.util.ArrayList.)))
+
+(wait-futures 2 (dosync (dotimes [v 5]
+                          (Thread/sleep (rand-int 50))
+                          (alter x #(doto % (.add v))))))
+@x
+
+;;barging
+(def x (ref 0))
+(dosync
+  @(future (dosync (ref-set x 0)))
+  (ref-set x 1))
+
+(def a (ref 0))
+(future (dotimes [_ 500] (dosync (Thread/sleep 200) (alter a inc))))
+@(future (dosync (Thread/sleep 1000) @a))
+(ref-history-count a)
+
+;; var
+;;meta data
+;;exp1
+(def ^{:private true} everthing 42)
+everthing
+;(ns other-ns)
+(refer 'demo.futures)
+@#'demo.futures/everthing
+
+;;exp2:const
+(def ^:const max-value 255)
+(defn valid-value?
+  [v]
+  (<= v max-value))
+(valid-value? 299)
+(def max-value 500)
+(valid-value? 299)
+
+;;exp3:Dynamic Scope
+(let [a 1
+      b 2]
+  (println (+ a b))
+  (let [b 3
+        + -]
+    (println (+ a b))))
+
+;Dynamic
+(def ^:dynamic *max-value* 255)
+(defn valid-value?
+  [v]
+  (<= v *max-value*))
+(binding [*max-value* 500]
+  (valid-value? 299))
+*max-value*
+
+(def ^:dynamic *var* :root)
+(defn get-*var* [] *var*)
+(binding [*var* :a]
+  (binding [*var* :b]
+    (binding [*var* :c]
+      (get-*var*))))
+(get-*var*)
+
+(defn http-get
+  [url-string]
+  (let [conn (-> url-string java.net.URL. .openConnection)
+        response-code (.getResponseCode conn)]
+    (if (== 404 response-code)
+      [response-code]
+      [response-code (-> conn .getInputStream slurp)])))
+(http-get "http://www.sian.com/bad-url")
+(http-get "http://www.sina.com")
+
+(def ^:dynamic *response-code* nil)
+(defn http-get
+  [url-string]
+  (let [conn (-> url-string java.net.URL. .openConnection)
+        response-code (.getResponseCode conn)]
+    (when (thread-bound? #'*response-code*)
+      (set! *response-code* response-code))
+    (when (not= 404 response-code) (-> conn .getInputStream slurp))))
+(http-get "http://www.sina.com")
+(http-get "http://www.sina.com.cn/bad111_url")
+
+(binding [*response-code* nil]
+  (let [content (http-get "http://www.sina.com.cn/bad111_url")]
+    (println "Response code was:" *response-code*)
+    ; ... do something with `content` if it is not nil ...
+    ))
+
+;;惰性数组不支持 “绑定传播”
+(binding [*max-value* 500]
+  (map valid-value? [299]))
+;;--> 解决办法
+(map #(binding [*max-value* 500]
+        (valid-value? %)) [299])
+
+;;前置声明
+;将核心函数放到最前面，具体小函数定义后面再定义。
+(declare complex-helper-fn other-helper-fn)
+(defn public-api-function
+  [arg1 arg2]
+  ...
+  (other-helper-fn arg1 arg2 (complex-helper-fn arg1 arg2))
+  (defn- complex-helper-fn
+    [arg1 arg2]
+    ...)
+  (defn- other-helper-fn
+    [arg1 arg2 arg3]
+    ...)
