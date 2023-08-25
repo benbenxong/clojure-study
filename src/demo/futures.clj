@@ -1,5 +1,6 @@
 (ns demo.futures
-  (:use clojure.pprint))
+  ;(:use clojure.pprint)
+  )
 (require '[clojure.repl :refer [demunge]])
 ;并发操作
 ;    协调  不协调
@@ -90,7 +91,7 @@
 (swap! sarah assoc :wears-glasses? true)
 (swap! sarah update-in [:age] inc)
 
-(pprint @history)
+;(pprint @history)
 
 ;(defn log->db
 ;  [db-id identity old new]
@@ -375,11 +376,102 @@ everthing
 (declare complex-helper-fn other-helper-fn)
 (defn public-api-function
   [arg1 arg2]
-  ...
-  (other-helper-fn arg1 arg2 (complex-helper-fn arg1 arg2))
+  ;...
+  (other-helper-fn arg1 arg2 (complex-helper-fn arg1 arg2)))
+
+
   (defn- complex-helper-fn
     [arg1 arg2]
     ...)
   (defn- other-helper-fn
     [arg1 arg2 arg3]
     ...)
+
+;;Agent
+(def a (agent 500))
+(send a range 1000)
+
+(def a (agent 0))
+(send a inc)
+
+;await
+(def a (agent 5000))
+(def b (agent 10000))
+(send-off a #(Thread/sleep %))
+(send-off b #(Thread/sleep %))
+;等待所有线程执行完成，才返回。
+(await a b)
+
+;exceptin
+(def a (agent nil))
+(send a (fn [_] (throw (Exception. "Somthing is wrong!"))))
+
+(send a identity)
+(restart-agent a 42)
+(send a inc)
+
+(reduce send a (for [x (range 3)]
+                 (fn [_] (throw (Exception. (str "error #" x))))))
+(restart-agent a 42 :clear-actions true)
+;(restart-agent a 42)
+(agent-error a)
+
+;; error mode ::= :fail (def),:continue
+(def a (agent nil :error-mode :continue))
+(send a (fn [_] (throw (Exception. "Somthing is wrong!"))))
+(send a identity)
+
+;;:error-handle 当:continue时，指定error-handle函数（agent,exception）
+(def a (agent nil
+              :error-mode :continue
+              :error-handler (fn [the-agent exception]
+                               (.println System/out (.getMessage exception)))))
+(send a (fn [_] (throw (Exception. "Somthing is wrong!"))))
+(send a identity)
+
+(set-error-handler! a (fn [the-agent exception]
+                        (when (= "FATAL" (.getMessage exception))
+                          (set-error-mode! the-agent :fail))))
+(send a (fn [_] (throw (Exception. "FATAL"))))
+
+;; I/O, Transactions, and Nested Sends
+;;Persisting reference states with an agent-based write-behind log
+(require '[clojure.java.io :as io])
+(def console (agent *out*))
+(def character-log (agent (io/writer "character-states.log" :append true)))
+
+(defn my-write
+  [^java.io.Writer w & content]
+  (doseq [x (interpose " " content)]
+    ;("ab" " " "cd")
+    (.write w (str x)))
+  (doto w
+    (.write "\n")
+    .flush
+    ))
+
+(defn log-reference
+  [reference & writer-agents]
+  (add-watch reference :log
+             (fn [_ reference old new]                      ;_ key
+               (doseq [writer-agent writer-agents]
+                 (send-off writer-agent my-write new)))))
+
+(def smaug (character "Smaug" :health 500 :strength 400))
+(def bilbo (character "Bilbo" :health 100 :strength 100))
+(def gandalf (character "Gandalf" :health 75 :mana 1000))
+(log-reference bilbo console character-log)
+(log-reference smaug console character-log)
+(log-reference gandalf console character-log)
+(wait-futures 1
+              (play bilbo attack smaug)
+              (play smaug attack bilbo)
+              (play gandalf heal bilbo))
+
+(def sum (agent 0))
+(def numbers [0 9 3 4 5 5 4 44 4 2 5 6 7 775])
+(doseq [x numbers]
+  (send sum + x))
+
+(await sum)
+(println @sum)
